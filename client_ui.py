@@ -6,12 +6,17 @@ from tkinter import messagebox, scrolledtext
 def enviar_requisicao():
     query = entry_query.get()
     ip_destino = entry_ip.get()
-    port = 65432
+    port = entry_door.get()
 
     if not query or not ip_destino:
         messagebox.showwarning("Atenção", "Preencha o IP e a Query SQL.")
         return
 
+    try:
+        port = int(port)
+    except ValueError:
+        messagebox.showerror("Erro", "A porta deve ser um número inteiro.")
+        return
     try:
         # Conecta ao Middleware
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -51,6 +56,14 @@ tk.Label(frame_top, text="IP do Nó:").pack(side=tk.LEFT)
 entry_ip = tk.Entry(frame_top, width=15)
 entry_ip.insert(0, "127.0.0.1")
 entry_ip.pack(side=tk.LEFT, padx=5)
+
+# Input de Porta
+frame_top = tk.Frame(janela)
+frame_top.pack(pady=5)
+tk.Label(frame_top, text="Número da Porta:").pack(side=tk.LEFT)
+entry_door = tk.Entry(frame_top, width=15)
+entry_door.insert(0, "5000")
+entry_door.pack(side=tk.LEFT, padx=5)
 
 # Input da Query
 tk.Label(janela, text="Digite a Query SQL:").pack(pady=5)
