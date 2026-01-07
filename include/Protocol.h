@@ -10,9 +10,9 @@ enum TipoMensagem: uint8_t{
     ELEICAO_PING = 2,
     ELEICAO_COORD = 3,
 
-    HEARTBEAT = 10,
-    ELEICAO_PING = 11,
-    ELEICAO_COORD = 12,
+    DB_PREPARE = 10,
+    DB_COMMIT = 11,
+    DB_ROLLBACK = 12,
 
     QUERY_REQ = 20,
     QUERY_RES = 21
@@ -22,7 +22,7 @@ enum TipoMensagem: uint8_t{
 struct Pacote{
     uint8_t tipo;
     uint32_t id_origem;
-    uint32_t checksum;
+    unsigned char checksum;
     char dados[1024];
 };
 
