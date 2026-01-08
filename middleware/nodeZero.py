@@ -74,7 +74,7 @@ def main():
     # 1. Configurar os Servidores (Ouvinte de peers e ouvinte de UI)
     
     porta_peers = config.getint('servidor', 'porta')
-    meus_peers = config.get('servidor', 'peers')
+    meus_peers = config.get('servidor', 'portas_peers')
     
     # Criação do Socket - AF_INET = IPv4 - SOCK_DGRAM = Protocolo UDP 
     servidor_peers = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
