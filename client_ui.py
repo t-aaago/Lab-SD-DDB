@@ -62,7 +62,7 @@ frame_top = tk.Frame(janela)
 frame_top.pack(pady=5)
 tk.Label(frame_top, text="Número da Porta:").pack(side=tk.LEFT)
 entry_door = tk.Entry(frame_top, width=15)
-entry_door.insert(0, "5000")
+entry_door.insert(0, "6000")
 entry_door.pack(side=tk.LEFT, padx=5)
 
 # Input da Query
