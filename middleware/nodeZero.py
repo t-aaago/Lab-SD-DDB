@@ -1,6 +1,7 @@
 import socket
 import threading
 import sys
+import json
 
 import configparser
 
@@ -26,7 +27,7 @@ def tratar_interface(conn, addr):
 
 def associar_interface():
     servidor_ui = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    porta_ui = 6000
+    porta_ui = config.getint('servidor', 'porta_ui')
     try:
         servidor_ui.bind((LISTEN_IP, porta_ui))
         servidor_ui.listen()
@@ -74,7 +75,7 @@ def main():
     # 1. Configurar os Servidores (Ouvinte de peers e ouvinte de UI)
     
     porta_peers = config.getint('servidor', 'porta')
-    meus_peers = config.get('servidor', 'portas_peers')
+    meus_peers = json.loads(config.get('servidor', 'portas_peers'))
     
     # Criação do Socket - AF_INET = IPv4 - SOCK_DGRAM = Protocolo UDP 
     servidor_peers = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
