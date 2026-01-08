@@ -2,6 +2,11 @@ import socket
 import threading
 import sys
 
+import configparser
+
+config = configparser.ConfigParser()
+config.read('config.ini')
+
 # Configurações iniciais
 # 0.0.0.0 permite escutar em todas as interfaces de rede (Wi-Fi, Ethernet, Localhost)
 LISTEN_IP = '0.0.0.0' 
@@ -69,8 +74,8 @@ def main():
     
     # 1. Configurar os Servidores (Ouvinte de peers e ouvinte de UI)
     
-    porta_peers = 5000
-    meus_peers = [5001, 5002]
+    porta_peers = config.getint('servidor', 'porta')
+    meus_peers = config.get('servidor', 'peers')
     
     # Criação do Socket - AF_INET = IPv4 - SOCK_DGRAM = Protocolo UDP 
     servidor_peers = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -93,7 +98,7 @@ def main():
     ouvinte_peers.start()
 
     # 3. Configurar o "Cliente" (Envio)
-    alvo_ip = "127.0.0.1"
+    alvo_ip = config['servidor']['ip']
     
     print("\n--- Pode começar a digitar (Ctrl+C para sair) ---")
     print("Sua vez: ", end="", flush=True)
