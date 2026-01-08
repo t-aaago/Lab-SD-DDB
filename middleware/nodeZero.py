@@ -19,7 +19,6 @@ def tratar_interface(conn, addr):
         if data:
             print(f"Recebido: {data}")
             conn.sendall(b"Recebido com sucesso") 
-            
     except Exception as e:
         print(f"Erro: {e}")
     finally:
@@ -38,20 +37,6 @@ def associar_interface():
     except Exception as e:
         print(f"Não foi possível escutar na porta {porta_ui}. Erro: {e}")
 
-
-def escutar_ui(servidor_ui):
-    """    
-    Função que roda em uma thread separada para escutar mensagens
-    da interface grafica.
-    """
-    while True:
-        try:
-            data, addr = servidor_ui.recvfrom(1024)
-            mensagem = data.decode('utf-8')
-            print(f"\n[Recebido de {addr[0]}:{addr[1]}]: {mensagem}")
-        except Exception as e:
-            print(f"Erro ao receber dados da ui: {e}")
-            break
 
 def escutar_peers(servidor_peers):
     """
