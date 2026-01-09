@@ -2,15 +2,10 @@ import socket
 import threading
 import sys
 import json
-
 import configparser
 
 config = configparser.ConfigParser()
 config.read(sys.argv[1])
-
-# Configurações iniciais
-# 0.0.0.0 permite escutar em todas as interfaces de rede (Wi-Fi, Ethernet, Localhost)
-LISTEN_IP = '0.0.0.0' 
 
 def tratar_interface(conn, addr):
     print(f"Conectado a {addr}")
