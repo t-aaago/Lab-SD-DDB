@@ -1,9 +1,8 @@
 import socket
 import threading
 
-LISTEN_IP = '0.0.0.0'
 
-class Canal_Comunicacaol:
+class Canal_Comunicacao:
     def __init__(self, nome_conexao, ip, tipo_protocolo, porta, funcao_callback):
         self.nome_conexao = nome_conexao
         self.ip = ip
@@ -54,23 +53,78 @@ class Canal_Comunicacaol:
             print(f"[Erro UDP Cliente] {e}")
 
     def _tratar_tcp(self):
-        conn, addr = self.sock.accept()
-        try:
-            data = conn.recv(1024)
-            if data:
-                mensagem = data.decode('utf-8')
-                resposta = self.callback(mensagem, addr[0])
+
+        print(f"Servidor TCP escutando em {self.porta}...")
+        while self.ativo:
+            try:
+                conn, addr = self.sock.accept()
+                print(f"[NOVA CONEXÃO] {addr} conectado.")
                 
-                if resposta:
-                    conn.sendall(str(resposta).encode('utf-8'))
+                # Cria uma thread dedicada para este cliente
+                t_cliente = threading.Thread(
+                    target=self._lidar_com_cliente_tcp, 
+                    args=(conn, addr), 
+                    daemon=True
+                )
+                t_cliente.start()
+            except Exception as e:
+                print(f"[Erro no Accept] {e}")
+
+    def _lidar_com_cliente_tcp(self, conn, addr):
+        print(f"[NOVA CONEXÃO] {addr} conectado.")
+        buffer_acumulado = ""
+        
+        # 1. TIMEOUT: Se ficar 5s sem receber nada, considera que caiu/travou
+        #conn.settimeout(5.0) 
+
+        try:
+            while True:
+                try:
+                    # Tenta receber dados
+                    data = conn.recv(1024)
+                except socket.timeout:
+                    print(f"[{addr[0]}] Timeout! Dispositivo parou de responder.")
+                    break # Sai do loop, indo para o finally
+                except Exception as e:
+                    print(f"[{addr[0]}] Erro de recebimento: {e}")
+                    break
+
+                # Se recebeu dados vazios (FIN), o cliente fechou corretamente
+                if not data:
+                    print(f"[{addr[0]}] Desconectou voluntariamente.")
+                    break
+                
+                # --- Processamento normal dos dados ---
+                texto_parcial = data.decode('utf-8')
+                buffer_acumulado += texto_parcial
+                
+                while '\n' in buffer_acumulado:
+                    mensagem_completa, resto = buffer_acumulado.split('\n', 1)
+                    buffer_acumulado = resto
+                    
+                    mensagem_limpa = mensagem_completa.strip()
+                    if mensagem_limpa:
+                        self.callback(mensagem_limpa, addr[0])
+                        
         except Exception as e:
-            print(f"[Erro TCP Cliente] {e}")
+            print(f"[Erro Geral {addr}] {e}")
+            
         finally:
             conn.close()
+            # 2. AVISO: Avisa a main que esse IP morreu
+            # Mandamos uma mensagem especial começando com "ERRO:" ou um JSON específico
+            msg_desconexao = '{"status": "desconectado", "ip": "' + addr[0] + '"}'
+            try:
+                self.callback(msg_desconexao, addr[0])
+            except:
+                pass # Evita crash se o callback não estiver preparado
+            
+            print(f"[{addr[0]}] Conexão encerrada e limpa.")
+
 
     def enviar_udp(self, mensagem, ip_alvo, porta_alvo):
 
-        if self.tipo != 'UDP':
+        if self.tipo_protocolo != 'UDP':
             print("Erro: Este método é apenas para canais UDP.")
             return
         
