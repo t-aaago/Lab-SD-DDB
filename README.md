@@ -1,189 +1,188 @@
-# Middleware de Banco de Dados Distribuído (DDB)
+# Tutorial de Execução: Sistema DDB com Tolerância a Falhas
 
-Este projeto consiste em um middleware desenvolvido em C++ que implementa um Sistema de Banco de Dados Distribuído (SBDD) **homogêneo** e **autônomo** sobre o SGBD MySQL.
+Este guia explica como configurar o ambiente, iniciar o cluster de 3 nós e executar a interface cliente com balanceamento de carga (failover).
 
-O sistema opera em uma arquitetura Peer-to-Peer (P2P) com coordenador dinâmico, garantindo a consistência dos dados através do protocolo **Two-Phase Commit (2PC)** e tolerância a falhas via **Algoritmo de Eleição (Bully)**.
+## 📋 1. Pré-requisitos
 
----
+Certifique-se de que tem instalado:
 
-## 📋 Funcionalidades
+1. **Python 3.8+**
 
-* **Distribuição de Dados:** Replicação síncrona de operações de escrita (`INSERT`, `UPDATE`, `DELETE`) em 3 nós.
-* **Transações ACID:** Garantia de atomicidade global via protocolo 2PC (Prepare & Commit/Rollback).
-* **Comunicação via Sockets:** Protocolo customizado sobre TCP/IP com verificação de integridade (**Checksum**).
-* **Tolerância a Falhas:** Detecção de queda do coordenador e eleição automática de um novo líder.
-* **Transparência:** Interface gráfica (Cliente) separada do Middleware. O cliente não sabe qual nó é o líder.
-* **Monitoramento:** Troca periódica de mensagens de "Heartbeat" entre os nós.
+2. **MySQL Server** (rodando localmente)
 
----
+3. Dependências do Python:
+   
+   ```
+   pip install mysql-connector-python
+   ```
 
-## 🛠️ Arquitetura do Projeto
+## ⚙️ 2. Configuração Inicial
 
-O sistema é dividido em três camadas lógicas:
+### A. Estrutura de Pastas
 
-1. **Aplicação Cliente (GUI):** Interface simples que envia queries SQL para o middleware local.
-2. **Middleware (C++):** Processo principal que gerencia a comunicação P2P, o consenso distribuído e a conexão com o banco.
-3. **Banco de Dados (MySQL):** Instância local do SGBD que armazena os dados fisicamente.
+Certifique-se de que a sua pasta `middleware` contém os seguintes ficheiros (criados nos passos anteriores):
 
-### Estrutura de Diretórios
+- `db.py` (Lógica principal)
 
-```text
-meu-middleware-ddb/
-├── config/             # Arquivos de configuração (IPs e Banco)
-├── src/                # Código fonte do Middleware (C++)
-│   ├── network/        # Gerenciamento de Sockets
-│   ├── database/       # Conexão com MySQL
-│   ├── core/           # Lógica (2PC, Eleição, Coordenador)
-│   └── utils/          # Checksum e Logs
-├── include/            # Headers e Definição do Protocolo
-├── gui_client/         # Aplicação Cliente (Interface Gráfica)
-└── CMakeLists.txt      # Configuração de Build
+- `network.py` (Camada de rede UDP)
 
-```
+- `database.ini` (Credenciais do MySQL)
 
----
+- `config_0.ini`, `config_1.ini`, `config_2.ini` (Configuração de cada nó)
 
-## 🚀 Pré-requisitos
+E na raiz do projeto:
 
-O sistema foi projetado para rodar em ambiente **Linux (Ubuntu/Debian)**.
+- `client_ui.py` (Interface Gráfica)
 
-### 1. Instalar Dependências do Sistema
+- `nodes.json` (Lista de servidores para a UI)
 
-Você precisará do compilador C++, CMake e das bibliotecas de desenvolvimento do MySQL.
+- `setup_db.py` (Script de criação da tabela - opcional)
 
-```bash
-sudo apt-get update
-sudo apt-get install build-essential cmake
-sudo apt-get install libmysqlcppconn-dev  # MySQL Connector C++
-sudo apt-get install mysql-server         # Servidor MySQL
+### B. Preparar o Banco de Dados
 
-```
+Antes de iniciar os nós, precisamos criar o banco e a tabela no MySQL.
 
-### 2. Configurar o Banco de Dados (MySQL)
+1. Edite o arquivo `middleware/database.ini` com a sua senha do MySQL:
+   
+   ```
+   [database]
+   host = localhost
+   user = root
+   password = SUA_SENHA_AQUI
+   database = meu_banco
+   ```
 
-Cada nó deve ter o MySQL rodando e um usuário configurado. Execute o script abaixo no terminal MySQL de **cada máquina**:
+2. Crie o banco e a tabela. Você pode rodar este script Python rápido (salve como `setup_db.py` na raiz):
+   
+   ```
+   import mysql.connector
+   # ... (código do setup_db.py fornecido anteriormente) ...
+   ```
+   
+   Ou execute no seu terminal MySQL:
+   
+   ```
+   CREATE DATABASE IF NOT EXISTS meu_banco;
+   USE meu_banco;
+   CREATE TABLE IF NOT EXISTS tabela (
+      id INT PRIMARY KEY,
+      nome VARCHAR(100),
+      valor DECIMAL(10, 2)
+   );
+   ```
 
-```sql
--- Acesse com: sudo mysql
+## 🚀 3. Iniciando o Cluster (Middleware)
 
-CREATE DATABASE ddb_sistema;
+Você precisará de **3 Terminais** diferentes (um para cada nó).
 
--- Cria usuário para o middleware
-CREATE USER 'middleware_user'@'localhost' IDENTIFIED BY 'senha_segura';
-GRANT ALL PRIVILEGES ON ddb_sistema.* TO 'middleware_user'@'localhost';
+**⚠️ Importante:** Execute todos os comandos a partir da **pasta raiz** do projeto (ex: `C:\dev\Lab-SD-DDB\`).
 
--- Habilita transações (necessário para InnoDB)
-SET autocommit = 0; 
-FLUSH PRIVILEGES;
-
-```
-
----
-
-## ⚙️ Configuração da Rede
-
-Antes de rodar, você deve configurar os IPs das máquinas no arquivo `config/network.ini`.
-
-**Exemplo de arquivo `config/network.ini`:**
-
-```ini
-[geral]
-porta_servidor=6000
-
-[nos]
-# ID = IP
-1=192.168.1.10
-2=192.168.1.11
-3=192.168.1.12
+#### Terminal 1 (Nó 0 - Líder Inicial)
 
 ```
-
-> **Nota:** Se estiver testando localmente, use `127.0.0.1` para todos, mas garanta que o código suporte portas diferentes para simulação.
-
----
-
-## 🔨 Compilação
-
-O projeto utiliza **CMake** para build.
-
-```bash
-# 1. Crie a pasta de build
-mkdir build && cd build
-
-# 2. Gere os arquivos de makefile
-cmake ..
-
-# 3. Compile o projeto
-make
-
+python -m middleware.db middleware/config_0.ini
 ```
 
-Após compilar, o executável `middleware` será criado na pasta `build`.
+*Portas: 5000 (Peers) / 6000 (UI)*
 
----
-
-## ▶️ Como Executar
-
-Para simular o sistema completo, você deve rodar o middleware em cada uma das 3 máquinas (ou terminais).
-
-### Passo 1: Iniciar os Middlewares
-
-Em cada máquina, rode o executável passando o ID correspondente (definido no `network.ini`):
-
-**Máquina 1:**
-
-```bash
-./middleware --id 1
+#### Terminal 2 (Nó 1)
 
 ```
-
-**Máquina 2:**
-
-```bash
-./middleware --id 2
-
+python -m middleware.db middleware/config_1.ini
 ```
 
-**Máquina 3:**
+*Portas: 5001 (Peers) / 6001 (UI)*
 
-```bash
-./middleware --id 3
-
-```
-
-*Assim que iniciados, eles começarão a trocar Heartbeats e realizarão a eleição do coordenador (Geralmente o maior ID, Nó 3).*
-
-### Passo 2: Iniciar o Cliente
-
-Abra a interface gráfica ou o cliente de terminal em qualquer máquina para enviar comandos.
-
-```bash
-cd gui_client
-# Exemplo se for Python
-python3 main_gui.py 
+#### Terminal 3 (Nó 2)
 
 ```
+python -m middleware.db middleware/config_2.ini
+```
 
----
+*Portas: 5002 (Peers) / 6002 (UI)*
 
-## 📚 Protocolo de Comunicação
+Se tudo estiver correto, cada terminal mostrará algo como:
 
-A comunicação entre nós utiliza pacotes binários estruturados:
+--- Nó X Rodando ---
 
-| Campo | Tamanho | Descrição |
-| --- | --- | --- |
-| `Tipo` | 1 Byte | `HEARTBEAT`, `ELEICAO`, `PREPARE`, `COMMIT`, `QUERY` |
-| `Origem` | 4 Bytes | ID do nó que enviou a mensagem |
-| `Tamanho` | 4 Bytes | Tamanho do payload de dados |
-| `Checksum` | 4 Bytes | Validação de integridade (XOR/CRC) |
-| `Dados` | Variável | String SQL ou parâmetros de controle |
+> Peers UDP: 500X
 
----
+> UI UDP: 600X
 
-## 👥 Autores
+## 🖥️ 4. Iniciando o Cliente (Interface Gráfica)
 
-Projeto desenvolvido para a disciplina de Sistemas Distribuídos.
+Abra um **4º Terminal** na raiz do projeto.
 
-* **Pedro Castro:** Interface Gráfica e Cliente.
-* **Tiago Oliveira:** Comunicação de Rede, Sockets e Protocolo.
-* **Elton Santos:** Gerenciamento de Banco de Dados, Consenso e Lógica Core.
+1. Certifique-se de que o arquivo `nodes.json` existe na raiz:
+   
+   ```
+   [
+      {"id": 0, "ip": "127.0.0.1", "port": 6000},
+      {"id": 1, "ip": "127.0.0.1", "port": 6001},
+      {"id": 2, "ip": "127.0.0.1", "port": 6002}
+   ]
+   ```
+
+2. Inicie a interface:
+   
+   ```
+   python client_ui.py
+   ```
+
+## 🧪 5. Como Testar
+
+### Teste Básico (Escrita e Leitura)
+
+1. Na Interface, digite a query:
+   
+   ```
+   INSERT INTO tabela VALUES (10, 'Teste A', 99.90)
+   ```
+
+2. Clique em **Enviar Query**.
+
+3. Verifique a caixa de logs. Você deve ver o processo de "Two-Phase Commit" (Prepare -> Ready -> Commit) e a mensagem de sucesso.
+
+4. Tente ler o dado:
+   
+   ```
+   SELECT * FROM tabela
+   ```
+
+### Teste de Tolerância a Falhas (Failover)
+
+O sistema foi desenhado para mudar de nó automaticamente se um deles falhar.
+
+1. Olhe na interface qual é o "Nó Alvo Atual" (ex: Nó 0 - Porta 6000).
+
+2. Vá no **Terminal 1** (onde roda o Nó 0) e pressione `Ctrl+C` para matá-lo.
+
+3. Volte na Interface e tente fazer um `SELECT * FROM tabela`.
+
+4. **Resultado Esperado:**
+   
+   - A interface vai tentar conectar no Nó 0 e dará **Timeout**.
+   
+   - Automaticamente, ela tentará o próximo da lista (Nó 1 - Porta 6001).
+   
+   - A conexão será bem-sucedida e o resultado aparecerá.
+   
+   - O "Nó Alvo Atual" será atualizado para o ID 1.
+
+## 📝 Comandos SQL Suportados
+
+O middleware é simplificado e suporta comandos básicos que comecem com:
+
+- `SELECT`
+
+- `INSERT`
+
+- `UPDATE`
+
+- `DELETE`
+
+Exemplos:
+
+- `DELETE FROM tabela WHERE id = 10`
+
+- `UPDATE tabela SET valor = 100.00 WHERE id = 10`
