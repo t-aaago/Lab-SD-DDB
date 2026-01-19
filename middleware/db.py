@@ -3,24 +3,25 @@ import json
 import time
 import configparser
 import threading
-import hashlib  # <--- NOVA IMPORTAÇÃO
+import hashlib
 import mysql.connector
 from middleware.network import Canal_Comunicacao
 
 # --- 1. CONFIGURAÇÃO E INICIALIZAÇÃO ---
 if len(sys.argv) < 2:
-    print("Uso: python replication_node.py <arquivo_config.ini>")
+    print("Uso: python -m middleware.db <arquivo_config.ini>")
     sys.exit(1)
 
 config = configparser.ConfigParser()
-arquivos_lidos = config.read(sys.argv[1])
-if not arquivos_lidos:
-    print(f"ERRO: Arquivo '{sys.argv[1]}' não encontrado.")
-    sys.exit(1)
+config.read(sys.argv[1])
+
+config_db = configparser.ConfigParser()
+config_db.read("middleware/database.ini")
 
 MY_ID = config.getint('servidor', 'id')
 MY_IP = config.get('servidor', 'ip')
 MY_PORT = config.getint('servidor', 'porta')
+MY_PORT_UI = config.getint('servidor', 'porta_ui') # Porta separada para UI
 PEERS_PORTS = json.loads(config.get('servidor', 'portas_peers'))
 
 # Definição do Líder Fixo
@@ -30,119 +31,106 @@ LEADER_PORT = 5000
 AM_I_LEADER = (MY_ID == LEADER_ID)
 
 DB_CONFIG = {
-    "host": "localhost",
-    "user": "root",
-    "password": "p80k97mn", 
-    "database": "meu_banco"
-}
+        "host": config_db.get('database', 'host'),
+        "user": config_db.get('database', 'user'),
+        "password": config_db.get('database', 'password'),
+        "database": config_db.get('database', 'database')
+    }
 
 # Controle de Fluxo
 evento_conclusao_write = threading.Event()
 lock_lider = threading.Lock()
 estado_lider = {"acks": 0, "total_peers": len(PEERS_PORTS), "sql": None}
 
-# --- 2. FUNÇÕES DE SEGURANÇA (HASH) ---
+# --- 2. FUNÇÕES AUXILIARES ---
 
 def gerar_hash(texto):
-    """Gera um hash SHA-256 de uma string."""
     return hashlib.sha256(texto.encode('utf-8')).hexdigest()
 
 def validar_integridade(msg):
-    """
-    Verifica se o hash recebido bate com o conteúdo.
-    Retorna True se íntegro, False se corrompido.
-    """
     sql = msg.get('sql')
     hash_recebido = msg.get('hash')
-    
-    # Se a mensagem não tem SQL, não precisa validar hash (ex: READY)
-    if not sql:
-        return True
-        
-    if not hash_recebido:
-        print(f"[ALERTA SEGURANÇA] Mensagem sem hash recebida de {msg.get('from_port')}")
-        return False
+    if not sql: return True
+    if not hash_recebido: return False
+    return hash_recebido == gerar_hash(sql)
 
-    hash_calculado = gerar_hash(sql)
-    if hash_recebido == hash_calculado:
-        return True
-    else:
-        print(f"[ERRO INTEGRIDADE] Hash inválido! Recebido: {hash_recebido[:8]}... Calc: {hash_calculado[:8]}...")
-        return False
-
-# --- 3. OPERAÇÕES (READ/WRITE) ---
+# --- 3. OPERAÇÕES (READ/WRITE) COM LOGS ---
 
 def read(sql):
-    print(f"[READ] Local: {sql}")
+    """Executa SELECT e retorna string com logs e resultado."""
+    log_output = [f"[READ] Processando: {sql}"]
     try:
         conn = mysql.connector.connect(**DB_CONFIG)
         cursor = conn.cursor()
         cursor.execute(sql)
         resultados = cursor.fetchall()
+        
+        log_output.append(f"--- RESULTADOS ({len(resultados)} linhas) ---")
         for row in resultados:
-            print(f"   -> {row}")
+            log_output.append(str(row))
+        
         conn.close()
-        return True
+        return "\n".join(log_output)
     except Exception as e:
-        print(f"[ERRO READ] {e}")
-        return False
+        msg_erro = f"[ERRO READ] {e}"
+        print(msg_erro)
+        return msg_erro
 
 def write(sql):
-    print(f"[WRITE] Iniciando transação segura para: {sql}")
+    """Executa INSERT/UPDATE/DELETE via 2PC e retorna log da operação."""
+    log_output = [f"[WRITE] Iniciando transação distribuída para: {sql}"]
     evento_conclusao_write.clear()
-    
-    # Calcula o hash antes de enviar qualquer coisa
     sql_hash = gerar_hash(sql)
     
     try:
         if AM_I_LEADER:
             if not lock_lider.acquire(blocking=False):
-                print("[LÍDER] Ocupado.")
-                return False
+                return "ERRO: O Coordenador está ocupado processando outra transação."
             
             estado_lider['sql'] = sql
             estado_lider['acks'] = 0 
             
-            # Envia PREPARE com Hash
+            log_output.append("[LIDER] Enviando PREPARE para os nós...")
             msg = json.dumps({
                 "type": "PREPARE", 
                 "sql": sql, 
-                "hash": sql_hash,  # <--- ENVIO DO HASH
+                "hash": sql_hash,
                 "from_port": MY_PORT
             })
             
             for p in PEERS_PORTS:
-                canal.enviar_udp(msg, "127.0.0.1", p)
+                canal_peers.enviar_udp(msg, "127.0.0.1", p)
 
         else:
-            # Seguidor: Envia FORWARD com Hash
+            log_output.append("[NO] Encaminhando para o Líder (FORWARD)...")
             msg = json.dumps({
                 "type": "FORWARD", 
                 "sql": sql, 
-                "hash": sql_hash, # <--- ENVIO DO HASH
+                "hash": sql_hash,
                 "from_port": MY_PORT
             })
-            canal.enviar_udp(msg, LEADER_IP, LEADER_PORT)
+            canal_peers.enviar_udp(msg, LEADER_IP, LEADER_PORT)
 
-        # Aguarda confirmação
+        # Aguarda confirmação (Bloqueia até timeout ou sucesso)
         sucesso = evento_conclusao_write.wait(timeout=5.0)
         
         if AM_I_LEADER:
             if lock_lider.locked(): lock_lider.release()
             
         if sucesso:
-            print("[WRITE] Sucesso! Integridade verificada e dados gravados.")
-            return True
+            log_output.append("[SUCESSO] Transação Commitada em todos os nós.")
+            return "\n".join(log_output)
         else:
-            print("[WRITE] Falha. (Timeout ou Erro de Integridade)")
-            return False
+            log_output.append("[FALHA] Timeout ou Erro de Integridade no Consenso.")
+            return "\n".join(log_output)
 
     except Exception as e:
-        print(f"[ERRO WRITE] {e}")
+        err = f"[ERRO CRÍTICO WRITE] {e}"
+        print(err)
         if AM_I_LEADER and lock_lider.locked(): lock_lider.release()
-        return False
+        return err
 
-# --- 4. BACKEND (REDE E BD) ---
+# --- 4. CALLBACKS DE REDE ---
 
 def _executar_commit_local(sql):
     try:
@@ -153,98 +141,103 @@ def _executar_commit_local(sql):
         conn.close()
         return True
     except Exception as e:
-        print(f"[ERRO BD] {e}")
+        print(f"[ERRO BD LOCAL] {e}")
         return False
 
-def tratar_mensagem_rede(msg_raw):
+# Callback para comunicação entre NÓS (Peers)
+def tratar_mensagem_peers(msg_raw, addr):
     try:
         msg = json.loads(msg_raw)
         
-        # --- ETAPA 1: VERIFICAÇÃO DE INTEGRIDADE ---
         if not validar_integridade(msg):
-            print("Mensagem descartada por falha de integridade.")
-            return # Aborta o processamento desta mensagem
+            print("Integridade falhou.")
+            return
 
         tipo = msg.get('type')
         remetente = msg.get('from_port')
 
-        # --- LÓGICA DO LÍDER ---
+        # Lógica do Líder
         if AM_I_LEADER:
             if tipo == 'FORWARD':
                 if not lock_lider.locked():
-                    print(f"[LÍDER] FORWARD recebido e validado de {remetente}.")
+                    print(f"[LÍDER] Recebido FORWARD de {remetente}")
                     lock_lider.acquire()
-                    
-                    sql = msg['sql']
-                    estado_lider['sql'] = sql
+                    estado_lider['sql'] = msg['sql']
                     estado_lider['acks'] = 0
                     
-                    # Repassa o hash original ou recalcula
                     msg_prep = json.dumps({
                         "type": "PREPARE", 
-                        "sql": sql, 
-                        "hash": msg['hash'], # Reutiliza o hash validado
+                        "sql": msg['sql'], 
+                        "hash": msg['hash'],
                         "from_port": MY_PORT
                     })
                     for p in PEERS_PORTS:
-                        canal.enviar_udp(msg_prep, "127.0.0.1", p)
+                        canal_peers.enviar_udp(msg_prep, "127.0.0.1", p)
 
             elif tipo == 'READY':
                 if estado_lider['sql']: 
                     estado_lider['acks'] += 1
                     if estado_lider['acks'] >= estado_lider['total_peers']:
-                        print(f"[LÍDER] Consenso atingido. Enviando COMMIT.")
-                        
-                        # Envia COMMIT com Hash
+                        print(f"[LÍDER] Consenso! Enviando COMMIT.")
                         sql_atual = estado_lider['sql']
                         msg_commit = json.dumps({
                             "type": "COMMIT", 
                             "sql": sql_atual, 
-                            "hash": gerar_hash(sql_atual), # Hash para garantir o commit
+                            "hash": gerar_hash(sql_atual),
                             "from_port": MY_PORT
                         })
                         for p in PEERS_PORTS:
-                            canal.enviar_udp(msg_commit, "127.0.0.1", p)
+                            canal_peers.enviar_udp(msg_commit, "127.0.0.1", p)
                         
                         _executar_commit_local(sql_atual)
                         evento_conclusao_write.set()
 
-        # --- LÓGICA COMUM ---
+        # Lógica Comum (Seguidores e Líder)
         if tipo == 'PREPARE':
-            # Se chegou aqui, o hash do PREPARE já foi validado em validar_integridade()
-            print(f"[PREPARE] SQL íntegro recebido: {msg['sql']}")
+            # Simula verificação e envia Ready
             if _executar_commit_local("SELECT 1"): 
                 resp = json.dumps({"type": "READY", "from_port": MY_PORT})
-                canal.enviar_udp(resp, LEADER_IP, LEADER_PORT)
+                canal_peers.enviar_udp(resp, LEADER_IP, LEADER_PORT)
 
         elif tipo == 'COMMIT':
-            # Hash do COMMIT também já foi validado
-            print(f"[COMMIT] Gravando: {msg['sql']}")
+            print(f"[COMMIT] Aplicando no BD: {msg['sql']}")
             _executar_commit_local(msg['sql'])
             evento_conclusao_write.set()
 
     except Exception as e:
-        print(f"Erro callback: {e}")
+        print(f"Erro no handler de peers: {e}")
+    
+    return None # Peers não respondem diretamente ao remetente via return, usam lógica interna
 
-canal = Canal_Comunicacao(f"Node_{MY_ID}", MY_IP, "UDP", MY_PORT, tratar_mensagem_rede)
+# Callback para comunicação com a INTERFACE (Cliente)
+def tratar_mensagem_ui(mensagem, addr):
+    print(f"[UI] Requisição de {addr}: {mensagem}")
+    cmd_upper = mensagem.strip().upper()
+    
+    if cmd_upper.startswith("SELECT"):
+        return read(mensagem)
+    elif any(cmd_upper.startswith(k) for k in ["INSERT", "UPDATE", "DELETE"]):
+        return write(mensagem)
+    else:
+        return "ERRO: Comando não suportado. Use SELECT, INSERT, UPDATE ou DELETE."
 
-# --- 5. LOOP PRINCIPAL ---
+# --- 5. INICIALIZAÇÃO DOS CANAIS ---
+
+# Canal 1: Comunicação Interna (Peers) - Porta 5000, 5001, etc.
+canal_peers = Canal_Comunicacao(f"Peer_{MY_ID}", MY_IP, "UDP", MY_PORT, tratar_mensagem_peers)
+
+# Canal 2: Comunicação Externa (UI) - Porta 6000 (Geralmente definida no config)
+canal_ui = Canal_Comunicacao(f"UI_{MY_ID}", MY_IP, "UDP", MY_PORT_UI, tratar_mensagem_ui)
+
 def main():
-    print(f"--- Nó {MY_ID} com Verificação de Integridade (SHA-256) ---")
-    while True:
-        try:
-            cmd = input("SQL> ").strip()
-            if not cmd: continue
-            cmd_upper = cmd.upper()
-
-            if cmd_upper.startswith("SELECT"):
-                read(cmd)
-            elif any(cmd_upper.startswith(k) for k in ["INSERT", "UPDATE", "DELETE"]):
-                write(cmd)
-            else:
-                print("Comando desconhecido.")
-        except KeyboardInterrupt:
-            sys.exit()
+    print(f"--- Nó {MY_ID} Rodando ---")
+    print(f" > Peers UDP: {MY_PORT}")
+    print(f" > UI UDP:    {MY_PORT_UI}")
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        sys.exit()
 
 if __name__ == "__main__":
     main()
